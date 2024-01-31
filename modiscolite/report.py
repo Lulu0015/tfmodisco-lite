@@ -19,28 +19,44 @@ import logomaker
 
 pd.options.display.max_colwidth = 500
 
-def read_meme(filename):
+def read_meme(filename,search_chars="ACGT"):
+	"""Parses meme files.
+	Args:
+		filename: the meme file to parse
+		search_chars: the characters to search for in the alphabet
+	Returns:
+		motifs: a dict whose keys are motif names and whose values are PWMs
+	"""
+ 
 	motifs = {}
 
 	with open(filename, "r") as infile:
 		motif, width, i = None, None, 0
-
+		alphabet = None
 		for line in infile:
+			if alphabet is None:
+				if line.startswith("ALPHABET"):
+					alphabet = line.split()[-1]
+					char_indices = [i for i, char in enumerate(alphabet) if char in search_chars]
 			if motif is None:
 				if line[:5] == 'MOTIF':
-					motif = line.split()[1]
+					if len(line.split()) == 2:
+						motif = line.split()[1]
+					elif len(line.split()) == 3:
+						motif = f"{line.split()[1]}/{line.split()[2]}"
 				else:
 					continue
 
 			elif width is None:
 				if line[:6] == 'letter':
 					width = int(line.split()[5])
-					pwm = np.zeros((width, 4))
+					pwm = np.zeros((width, len(char_indices)))
 
 			elif i < width:
-				pwm[i] = list(map(float, line.split()))
+				original_list = list(map(float, line.split()))
+				selected_elements = [original_list[i] for i in char_indices]
+				pwm[i] = selected_elements
 				i += 1
-
 			else:
 				motifs[motif] = pwm
 				motif, width, i = None, None, 0
@@ -49,10 +65,10 @@ def read_meme(filename):
 
 
 def compute_per_position_ic(ppm, background, pseudocount):
-    alphabet_len = len(background)
-    ic = ((np.log((ppm+pseudocount)/(1 + pseudocount*alphabet_len))/np.log(2))
-          *ppm - (np.log(background)*background/np.log(2))[None,:])
-    return np.sum(ic,axis=1)
+	alphabet_len = len(background)
+	ic = ((np.log((ppm+pseudocount)/(1 + pseudocount*alphabet_len))/np.log(2))
+		  *ppm - (np.log(background)*background/np.log(2))[None,:])
+	return np.sum(ic,axis=1)
 
 
 def write_meme_file(ppm, bg, fname):
@@ -132,6 +148,7 @@ def generate_tomtom_dataframe(modisco_h5py: os.PathLike,
 		top_n_matches=3, tomtom_exec: str="tomtom", trim_threshold=0.3,
 		trim_min_length=3):
 
+	motifs = read_meme(meme_motif_db)
 	tomtom_results = {}
 
 	for i in range(top_n_matches):
@@ -155,20 +172,30 @@ def generate_tomtom_dataframe(modisco_h5py: os.PathLike,
 				pattern_name = f'{contribution_dir_name}.pattern_{idx}'
 
 				r = fetch_tomtom_matches(ppm, cwm,
-			     	is_writing_tomtom_matrix=is_writing_tomtom_matrix,
+				 	is_writing_tomtom_matrix=is_writing_tomtom_matrix,
 					output_dir=output_dir, pattern_name=pattern_name,
 					motifs_db=meme_motif_db, tomtom_exec_path=tomtom_exec,
 					trim_threshold=trim_threshold,
 					trim_min_length=trim_min_length)
 
 				i = -1
+	
+
 				for i, (target, qval) in r.iloc[:top_n_matches].iterrows():
-					tomtom_results[f'match{i}'].append(target)
+					foundmatch = False
+					for key in motifs.keys():
+						# Split the key by '/'
+						parts = key.split('/')
+						if len(parts) == 2 and parts[0] == target:
+							foundmatch = True
+							tomtom_results[f'match{i}'].append(key)
+					if not foundmatch:
+						tomtom_results[f'match{i}'].append(target)
 					tomtom_results[f'qval{i}'].append(qval)
 
 				for j in range(i+1, top_n_matches):
 					tomtom_results[f'match{j}'].append(None)
-					tomtom_results[f'qval{j}'].append(None)			
+					tomtom_results[f'qval{j}'].append(None)
 
 	return pandas.DataFrame(tomtom_results)
 
@@ -192,14 +219,38 @@ def _plot_weights(array, path, figsize=(10,3)):
 	plt.close()
 	
 def make_logo(match, logo_dir, motifs):
+	# if match == 'NA':
+	# 	return
+
+	# background = np.array([0.25, 0.25, 0.25, 0.25])
+	
+	# foundkey = None
+	# founduid = None
+	# for key in motifs.keys():
+	# 	# Split the key by '/'
+	# 	parts = key.split('/')		
+	# 	# Check if the part before the '/' matches the search term
+	# 	if len(parts) == 2 and parts[0] == match:
+	# 		foundkey = key
+	# 		founduid = parts[0]
+	# if foundkey is None:
+	# 	foundkey = match
+	# 	founduid = match
+	# ppm = motifs[foundkey]
+	# ic = compute_per_position_ic(ppm, background, 0.001)
 	if match == 'NA':
 		return
 
+	parts = match.split('/')
+	if len(parts) >= 2:
+		founduid = parts[0]
+	else:
+		founduid = match
 	background = np.array([0.25, 0.25, 0.25, 0.25])
 	ppm = motifs[match]
 	ic = compute_per_position_ic(ppm, background, 0.001)
-
-	_plot_weights(ppm*ic[:, None], path='{}/{}.png'.format(logo_dir, match))
+ 
+	_plot_weights(ppm*ic[:, None], path='{}/{}.png'.format(logo_dir, founduid))
 		
 
 def create_modisco_logos(modisco_h5py: os.PathLike, modisco_logo_dir, trim_threshold, pattern_groups: List[str]):
@@ -299,7 +350,7 @@ def report_motifs(modisco_h5py: Path, output_dir: os.PathLike, img_path_suffix: 
 						logos.append("NA")
 					else:
 						make_logo(row[name], output_dir, motifs)
-						logos.append(f'{img_path_suffix}{row[name]}.png')
+						logos.append(f"{img_path_suffix}{row[name].split('/')[0]}.png")
 				else:
 					break
 
