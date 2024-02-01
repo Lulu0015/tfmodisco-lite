@@ -295,7 +295,7 @@ def create_modisco_logos(modisco_h5py: os.PathLike, modisco_logo_dir, trim_thres
 
 def report_motifs(modisco_h5py: Path, output_dir: os.PathLike, img_path_suffix: os.PathLike, 
 	meme_motif_db: Union[os.PathLike, None], is_writing_tomtom_matrix: bool, top_n_matches=3,
-	trim_threshold=0.3, trim_min_length=3):
+	trim_threshold=0.3, trim_min_length=3, html_fname: Union[os.PathLike, None] = 'motifs.html'):
 
 	if not os.path.isdir(output_dir):
 		os.mkdir(output_dir)
